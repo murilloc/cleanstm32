@@ -1,14 +1,17 @@
-# Guia: Ambiente de Desenvolvimento STM32 (libopencm3 + CMake + CLion)
+# Guia: Ambiente de Desenvolvimento STM32 (libopencm3 + FreeRTOS + CMake + CLion)
 
-Guia passo a passo para montar, do zero, um ambiente de desenvolvimento
-bare-metal para placas STM32 no **Windows**, usando:
+Guia passo a passo para montar, do zero, um ambiente de desenvolvimento para
+placas STM32 no **Windows**, com a aplicação (blink) rodando sobre o **FreeRTOS**,
+usando:
 
 - **STM32CubeCLT** (toolchain ARM GCC, CMake, Ninja, ST-LINK GDB server, CubeProgrammer CLI)
 - **libopencm3** (biblioteca de periféricos, alternativa leve à HAL/CubeMX)
+- **FreeRTOS** (kernel de tempo real; o blink vira uma *task*)
 - **CLion** como IDE (build, flash e debug com breakpoints)
 
 O projeto é **multi-placa**: um único código-fonte serve várias placas; troca-se
-de placa apenas passando `-DBOARD=<placa>`, sem editar código.
+de placa apenas passando `-DBOARD=<placa>`, sem editar código. O **port do
+FreeRTOS** (Cortex-M3 / M4F / M7) também é selecionado pelo perfil da placa.
 
 > A [Parte B — Problemas Encontrados e Soluções](#parte-b--problemas-encontrados-e-soluções)
 > reúne todos os erros que apareceram durante a montagem e como cada um foi resolvido.
@@ -29,6 +32,7 @@ de placa apenas passando `-DBOARD=<placa>`, sem editar código.
   - [A.5 Perfis de placa (`boards/*.cmake`)](#a5-perfis-de-placa-boardscmake)
   - [A.6 Código da aplicação (`src/main.c`)](#a6-código-da-aplicação-srcmainc)
   - [A.7 Baixar e compilar a libopencm3](#a7-baixar-e-compilar-a-libopencm3)
+  - [A.7b Baixar o FreeRTOS e o `FreeRTOSConfig.h`](#a7b-baixar-o-freertos-e-o-freertosconfigh)
   - [A.8 Configurar o CLion](#a8-configurar-o-clion)
   - [A.9 Compilar (build)](#a9-compilar-build)
   - [A.10 Gravar na placa (flash)](#a10-gravar-na-placa-flash)
@@ -60,13 +64,13 @@ ajuste o número da pasta nos comandos e arquivos.
 
 ## Placas suportadas
 
-| `-DBOARD=` | MCU | Núcleo | LED de usuário | Flash / RAM | Alvo libopencm3 |
-|---|---|---|---|---|---|
-| `BluePill`   | STM32F103C8 | Cortex-M3        | PC13 | 64K / 20K   | `opencm3_stm32f1` |
-| `BlackPill`  | STM32F411CE | Cortex-M4F       | PC13 | 512K / 128K | `opencm3_stm32f4` |
-| `NucleoF446` | STM32F446RE | Cortex-M4F       | PA5 (LD2) | 512K / 128K | `opencm3_stm32f4` |
-| `NucleoF767` | STM32F767ZI | Cortex-M7 (FPU dupla) | PB0 (LD1) | 2M / 512K | `opencm3_stm32f7` |
-| `NucleoG474` | STM32G474RE | Cortex-M4F       | PA5 (LD2) | 512K / 128K | `opencm3_stm32g4` |
+| `-DBOARD=` | MCU | Núcleo | LED de usuário | Flash / RAM | Alvo libopencm3 | Port FreeRTOS |
+|---|---|---|---|---|---|---|
+| `BluePill`   | STM32F103C8 | Cortex-M3        | PC13 | 64K / 20K   | `opencm3_stm32f1` | `ARM_CM3` |
+| `BlackPill`  | STM32F411CE | Cortex-M4F       | PC13 | 512K / 128K | `opencm3_stm32f4` | `ARM_CM4F` |
+| `NucleoF446` | STM32F446RE | Cortex-M4F       | PA5 (LD2) | 512K / 128K | `opencm3_stm32f4` | `ARM_CM4F` |
+| `NucleoF767` | STM32F767ZI | Cortex-M7 (FPU dupla) | PB0 (LD1) | 2M / 512K | `opencm3_stm32f7` | `ARM_CM7/r0p1` |
+| `NucleoG474` | STM32G474RE | Cortex-M4F       | PA5 (LD2) | 512K / 128K | `opencm3_stm32g4` | `ARM_CM4F` |
 
 ---
 
@@ -76,22 +80,26 @@ ajuste o número da pasta nos comandos e arquivos.
 cleanstm32/
 ├── arm-none-eabi.cmake      # toolchain (ferramentas; igual para toda placa)
 ├── CMakeLists.txt           # seletor de placa + build (não muda por placa)
-├── boards/                  # 1 perfil por placa (CPU, família, memória, LED)
+├── boards/                  # 1 perfil por placa (CPU, família, memória, LED, port FRTOS)
 │   ├── BluePill.cmake
 │   ├── BlackPill.cmake
 │   ├── NucleoF446.cmake
 │   ├── NucleoF767.cmake
 │   └── NucleoG474.cmake
+├── config/
+│   └── FreeRTOSConfig.h     # configuração do FreeRTOS (genérica p/ Cortex-M)
 ├── src/
-│   └── main.c               # aplicação (blink); LED vem do perfil
-└── libopencm3/              # clonada e compilada (passo A.7)
+│   └── main.c               # aplicação (blink em task FreeRTOS); LED vem do perfil
+├── libopencm3/              # clonada e compilada (passo A.7)
+└── freertos/                # kernel FreeRTOS, clonado (passo A.7b)
 ```
 
 **Princípio de organização:**
 - **Toolchain** (`arm-none-eabi.cmake`) → *quais ferramentas* usar. Igual para toda placa.
 - **Perfil** (`boards/*.cmake`) → *o que muda por placa*: família, flags de CPU,
-  memória e pino do LED.
-- **`CMakeLists.txt`** → cola tudo; não precisa ser editado ao trocar de placa.
+  memória, pino do LED, **port do FreeRTOS** e **clock do núcleo**.
+- **`CMakeLists.txt`** → cola tudo (inclui kernel FreeRTOS + port + heap); não
+  precisa ser editado ao trocar de placa.
 
 ---
 
@@ -189,7 +197,8 @@ if(NOT EXISTS ${BOARD_FILE})
 endif()
 
 # Carrega o perfil: define MCU_FAMILY, CPU_FLAGS, LIBOPENCM3_TGT, LIBOPENCM3_LD,
-# LED_RCC/LED_PORT/LED_PIN, FLASH_SIZE, RAM_SIZE, FLASH_ORIGIN, RAM_ORIGIN.
+# LED_RCC/LED_PORT/LED_PIN, FLASH_SIZE, RAM_SIZE, FLASH_ORIGIN, RAM_ORIGIN,
+# FREERTOS_PORT e CPU_CLOCK_HZ.
 include(${BOARD_FILE})
 message(STATUS "Placa: ${BOARD}  Familia: ${MCU_FAMILY}  Flags: ${CPU_FLAGS}")
 
@@ -230,10 +239,43 @@ add_link_options(
     -specs=nosys.specs
 )
 
-include_directories(${LIBOPENCM3_INC})
+# --- 4b. FreeRTOS ---------------------------------------------------------
+# Port escolhido pelo perfil da placa (FREERTOS_PORT), conforme o core:
+#   Cortex-M3 -> ARM_CM3 | Cortex-M4F -> ARM_CM4F | Cortex-M7 -> ARM_CM7/r0p1
+# CPU_CLOCK_HZ tambem vem do perfil (clock real do nucleo no HSI de reset).
+if(NOT DEFINED FREERTOS_PORT)
+    message(FATAL_ERROR "FREERTOS_PORT nao definido em boards/${BOARD}.cmake.")
+endif()
+if(NOT DEFINED CPU_CLOCK_HZ)
+    message(FATAL_ERROR "CPU_CLOCK_HZ nao definido em boards/${BOARD}.cmake.")
+endif()
+
+set(FREERTOS_DIR      ${CMAKE_SOURCE_DIR}/freertos)
+set(FREERTOS_PORT_DIR ${FREERTOS_DIR}/portable/GCC/${FREERTOS_PORT})
+
+set(FREERTOS_SRC
+    ${FREERTOS_DIR}/list.c
+    ${FREERTOS_DIR}/queue.c
+    ${FREERTOS_DIR}/tasks.c
+    ${FREERTOS_DIR}/timers.c
+    ${FREERTOS_DIR}/event_groups.c
+    ${FREERTOS_DIR}/stream_buffer.c
+    ${FREERTOS_PORT_DIR}/port.c
+    ${FREERTOS_DIR}/portable/MemMang/heap_4.c
+)
+
+# Clock real (HSI de reset) -> usado pelo FreeRTOSConfig.h (configCPU_CLOCK_HZ).
+add_compile_definitions(CONF_CPU_CLOCK_HZ=${CPU_CLOCK_HZ})
+
+include_directories(
+    ${LIBOPENCM3_INC}
+    ${FREERTOS_DIR}/include
+    ${FREERTOS_PORT_DIR}
+    ${CMAKE_SOURCE_DIR}/config        # onde mora o FreeRTOSConfig.h
+)
 
 # --- 5. Alvo --------------------------------------------------------------
-add_executable(${PROJECT_NAME}.elf src/main.c)
+add_executable(${PROJECT_NAME}.elf src/main.c ${FREERTOS_SRC})
 target_link_libraries(${PROJECT_NAME}.elf ${LIBOPENCM3_TGT})
 
 add_custom_command(TARGET ${PROJECT_NAME}.elf POST_BUILD
@@ -272,6 +314,8 @@ set(MCU_FAMILY      STM32F1)
 set(CPU_FLAGS       -mcpu=cortex-m3 -mthumb)   # M3 nao tem FPU
 set(LIBOPENCM3_TGT  opencm3_stm32f1)
 set(LIBOPENCM3_LD   cortex-m-generic.ld)
+set(FREERTOS_PORT   ARM_CM3)        # core Cortex-M3
+set(CPU_CLOCK_HZ    8000000)        # HSI de reset do F103 = 8 MHz
 set(LED_RCC   RCC_GPIOC)
 set(LED_PORT  GPIOC)
 set(LED_PIN   GPIO13)
@@ -288,6 +332,8 @@ set(MCU_FAMILY      STM32F4)
 set(CPU_FLAGS       -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard)
 set(LIBOPENCM3_TGT  opencm3_stm32f4)
 set(LIBOPENCM3_LD   cortex-m-generic.ld)
+set(FREERTOS_PORT   ARM_CM4F)       # core Cortex-M4F
+set(CPU_CLOCK_HZ    16000000)       # HSI de reset do F411 = 16 MHz
 set(LED_RCC   RCC_GPIOC)
 set(LED_PORT  GPIOC)
 set(LED_PIN   GPIO13)
@@ -304,6 +350,8 @@ set(MCU_FAMILY      STM32F4)
 set(CPU_FLAGS       -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard)
 set(LIBOPENCM3_TGT  opencm3_stm32f4)
 set(LIBOPENCM3_LD   cortex-m-generic.ld)
+set(FREERTOS_PORT   ARM_CM4F)       # core Cortex-M4F
+set(CPU_CLOCK_HZ    16000000)       # HSI de reset do F446 = 16 MHz
 set(LED_RCC   RCC_GPIOA)
 set(LED_PORT  GPIOA)
 set(LED_PIN   GPIO5)
@@ -320,6 +368,8 @@ set(MCU_FAMILY      STM32F7)
 set(CPU_FLAGS       -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard)
 set(LIBOPENCM3_TGT  opencm3_stm32f7)
 set(LIBOPENCM3_LD   cortex-m-generic.ld)
+set(FREERTOS_PORT   ARM_CM7/r0p1)   # core Cortex-M7
+set(CPU_CLOCK_HZ    16000000)       # HSI de reset do F767 = 16 MHz
 set(LED_RCC   RCC_GPIOB)
 set(LED_PORT  GPIOB)
 set(LED_PIN   GPIO0)
@@ -336,6 +386,8 @@ set(MCU_FAMILY      STM32G4)
 set(CPU_FLAGS       -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard)
 set(LIBOPENCM3_TGT  opencm3_stm32g4)
 set(LIBOPENCM3_LD   cortex-m-generic.ld)
+set(FREERTOS_PORT   ARM_CM4F)       # core Cortex-M4F
+set(CPU_CLOCK_HZ    16000000)       # HSI de reset do G474 = 16 MHz
 set(LED_RCC   RCC_GPIOA)
 set(LED_PORT  GPIOA)
 set(LED_PIN   GPIO5)
@@ -354,32 +406,29 @@ set(RAM_ORIGIN   0x20000000)
 
 Blink que se adapta: o **pino** vem do perfil (via `-D`); a **API de GPIO** é
 escolhida pela **família** (F1 usa `gpio_set_mode`; F4/F7/G4 usam `gpio_mode_setup`).
+A diferença para um blink bare-metal é que aqui o LED é alternado por uma **task
+do FreeRTOS** que cede a CPU em `vTaskDelay()` — quem conta o tempo é o SysTick
+sob controle do escalonador, não um laço de `nop`.
 
 ```c
 /*
- * Blink multi-placa com libopencm3.
+ * Blink multi-placa com libopencm3 + FreeRTOS.
  *   - O PINO do LED (LED_RCC/LED_PORT/LED_PIN) vem do PERFIL da placa
- *     (boards/*.cmake), repassado pelo CMakeLists via -DLED_*.
+ *     (boards/<placa>.cmake), repassado pelo CMakeLists via -DLED_*.
  *   - A API de GPIO depende so' da FAMILIA (-D${MCU_FAMILY}):
  *       F1            -> gpio_set_mode()
  *       F4/F7/G4 etc. -> gpio_mode_setup() + gpio_set_output_options()
  */
 
-#include <stdint.h>
-
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/gpio.h>
 
-#if !defined(LED_RCC) || !defined(LED_PORT) || !defined(LED_PIN)
-  #error "Defina LED_RCC/LED_PORT/LED_PIN no perfil da placa (boards/*.cmake)."
-#endif
+#include <FreeRTOS.h>
+#include <task.h>
 
-static void delay(volatile uint32_t count)
-{
-    while (count--) {
-        __asm__("nop");
-    }
-}
+#if !defined(LED_RCC) || !defined(LED_PORT) || !defined(LED_PIN)
+  #error "Defina LED_RCC/LED_PORT/LED_PIN no perfil da placa (boards/<placa>.cmake)."
+#endif
 
 static void led_setup(void)
 {
@@ -396,21 +445,37 @@ static void led_setup(void)
 #endif
 }
 
+/* Tarefa unica: alterna o LED cedendo a CPU no vTaskDelay. */
+static void blink_task(void *args)
+{
+    (void)args;
+
+    for (;;) {
+        gpio_toggle(LED_PORT, LED_PIN);
+        vTaskDelay(pdMS_TO_TICKS(1000));   // menor = pisca mais rapido
+    }
+}
+
 int main(void)
 {
     led_setup();
 
-    while (1) {
-        gpio_toggle(LED_PORT, LED_PIN);
-        delay(200000);   // menor = pisca mais rapido
-    }
+    xTaskCreate(blink_task, "blink", configMINIMAL_STACK_SIZE,
+                NULL, tskIDLE_PRIORITY + 1, NULL);
 
+    vTaskStartScheduler();
+
+    /* So' retorna se faltar heap para o scheduler. */
+    for (;;) {
+    }
     return 0;
 }
 ```
 
-> O `#include <stdint.h>` é necessário por causa de `uint32_t`. Sem ele, o código
-> só compila "por acidente" via include transitivo (ver Parte B, Problema 2).
+> `pdMS_TO_TICKS()` converte milissegundos em ticks usando `configTICK_RATE_HZ`
+> (1000 Hz no `FreeRTOSConfig.h`). O período do blink em ms só sai exato se o
+> `configCPU_CLOCK_HZ` bater com o clock real do núcleo — por isso o
+> `CPU_CLOCK_HZ` do perfil reflete o HSI de reset (ver A.7b).
 
 ### A.7 Baixar e compilar a libopencm3
 
@@ -447,6 +512,95 @@ libopencm3/lib/cortex-m-generic.ld      <- linker script generico
 > (ex.: `libopencm3_stm32f4.ld`). Existe um único `cortex-m-generic.ld`, e o
 > projeto fornece o bloco `MEMORY` — exatamente o que o `CMakeLists.txt` faz no
 > passo 3 (ver Parte B, Problema 8).
+
+### A.7b Baixar o FreeRTOS e o `FreeRTOSConfig.h`
+
+Na raiz do projeto, clone o kernel do FreeRTOS na pasta `freertos/`:
+
+```powershell
+git clone --branch V11.1.0 --depth 1 https://github.com/FreeRTOS/FreeRTOS-Kernel.git freertos
+```
+
+> Mesmo erro de certificado SSL da libopencm3 pode aparecer aqui. Use o backend do
+> Windows: `git -c http.sslBackend=schannel clone --branch V11.1.0 --depth 1 <url> freertos`.
+
+**Não há build separado:** o `CMakeLists.txt` (passo A.4, seção 4b) já compila os
+fontes do kernel (`tasks.c`, `queue.c`, `list.c`, `timers.c`, `event_groups.c`,
+`stream_buffer.c`), o **port do core** (`portable/GCC/<FREERTOS_PORT>/port.c`,
+escolhido pelo perfil) e o alocador `portable/MemMang/heap_4.c`, junto com o
+firmware.
+
+Crie o arquivo de configuração **`config/FreeRTOSConfig.h`**:
+
+```c
+#ifndef FREERTOS_CONFIG_H
+#define FREERTOS_CONFIG_H
+
+#ifndef CONF_CPU_CLOCK_HZ
+#error "Defina CONF_CPU_CLOCK_HZ no perfil da placa (boards/<placa>.cmake) via CMake."
+#endif
+
+/* --- Escalonador e memoria --- */
+#define configUSE_PREEMPTION                    1
+#define configUSE_TIME_SLICING                  1
+#define configCPU_CLOCK_HZ                      ( ( unsigned long ) CONF_CPU_CLOCK_HZ )
+#define configTICK_RATE_HZ                      ( ( TickType_t ) 1000 )
+#define configMAX_PRIORITIES                    ( 5 )
+#define configMINIMAL_STACK_SIZE                ( ( unsigned short ) 128 )
+#define configTOTAL_HEAP_SIZE                   ( ( size_t ) ( 8 * 1024 ) )
+#define configMAX_TASK_NAME_LEN                 ( 16 )
+#define configUSE_16_BIT_TICKS                  0
+#define configIDLE_SHOULD_YIELD                 1
+#define configSUPPORT_DYNAMIC_ALLOCATION        1
+#define configSUPPORT_STATIC_ALLOCATION         0
+
+/* --- Recursos opcionais --- */
+#define configUSE_MUTEXES                       1
+#define configUSE_TASK_NOTIFICATIONS            1
+#define configUSE_TIMERS                        0
+#define configUSE_CO_ROUTINES                   0
+
+/* --- Hooks (desligados) --- */
+#define configUSE_IDLE_HOOK                     0
+#define configUSE_TICK_HOOK                     0
+#define configCHECK_FOR_STACK_OVERFLOW          0
+#define configUSE_MALLOC_FAILED_HOOK            0
+
+/* --- API incluida na build --- */
+#define INCLUDE_vTaskDelete                     1
+#define INCLUDE_vTaskSuspend                    1
+#define INCLUDE_vTaskDelay                      1
+
+/* --- Prioridades de interrupcao (Cortex-M, 4 bits no STM32) --- */
+#define configPRIO_BITS                         4
+#define configLIBRARY_LOWEST_INTERRUPT_PRIORITY        15
+#define configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY   5
+#define configKERNEL_INTERRUPT_PRIORITY \
+        ( configLIBRARY_LOWEST_INTERRUPT_PRIORITY << ( 8 - configPRIO_BITS ) )
+#define configMAX_SYSCALL_INTERRUPT_PRIORITY \
+        ( configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY << ( 8 - configPRIO_BITS ) )
+
+/* --- Ponte de handlers: nomes do FreeRTOS -> nomes do vetor libopencm3 --- */
+#define vPortSVCHandler                         sv_call_handler
+#define xPortPendSVHandler                      pend_sv_handler
+#define xPortSysTickHandler                     sys_tick_handler
+
+#define configASSERT( x ) \
+        if( ( x ) == 0 ) { taskDISABLE_INTERRUPTS(); for( ;; ); }
+
+#endif /* FREERTOS_CONFIG_H */
+```
+
+> **Os dois pontos que fazem libopencm3 + FreeRTOS conviverem:**
+> 1. **Ponte de handlers** (os três `#define` no fim): a tabela de vetores do
+>    libopencm3 chama `sv_call_handler` / `pend_sv_handler` / `sys_tick_handler`,
+>    mas o port do FreeRTOS define `vPortSVCHandler` / `xPortPendSVHandler` /
+>    `xPortSysTickHandler`. Sem o remapeamento, SysTick/PendSV nunca rodam e o
+>    scheduler trava na primeira troca de contexto (ver Parte B, Problema 12).
+> 2. **`configCPU_CLOCK_HZ`** vem do perfil via `-DCONF_CPU_CLOCK_HZ` (injetado no
+>    `CMakeLists.txt`). Como o `main.c` não chama `rcc_clock_setup`, o núcleo roda
+>    no HSI de reset — e é esse valor (8 MHz no F1, 16 MHz nos demais) que está no
+>    `CPU_CLOCK_HZ` de cada perfil, para o tick de 1 ms sair correto.
 
 ### A.8 Configurar o CLion
 
@@ -658,6 +812,31 @@ Este foi o problema com mais etapas. Foi resolvido em três fases:
    > caminhos diferentes**: o flash (CubeProgrammer) pode funcionar mesmo com a
    > sonda exigindo upgrade para o debug (GDB server).
 
+### Problema 12 — FreeRTOS: scheduler trava (handlers não chamados)
+- **Sintoma:** com o FreeRTOS integrado, o firmware compila e linka, mas o LED
+  não pisca — o programa parece parar logo após `vTaskStartScheduler()`.
+- **Causa:** o port Cortex-M do FreeRTOS faz a troca de contexto via os handlers
+  **SVC**, **PendSV** e **SysTick**, que ele exporta como `vPortSVCHandler`,
+  `xPortPendSVHandler` e `xPortSysTickHandler`. Mas a **tabela de vetores é do
+  libopencm3**, e ela referencia esses slots pelos nomes `sv_call_handler`,
+  `pend_sv_handler` e `sys_tick_handler`. Com nomes diferentes, os handlers do
+  FreeRTOS não entram na tabela: o `SysTick` cai no handler *weak* default
+  (laço vazio) e nenhuma troca de contexto acontece.
+- **Solução:** mapear um nome no outro, no `FreeRTOSConfig.h`:
+  ```c
+  #define vPortSVCHandler     sv_call_handler
+  #define xPortPendSVHandler  pend_sv_handler
+  #define xPortSysTickHandler sys_tick_handler
+  ```
+  Assim o port define funções com os nomes que o vetor do libopencm3 espera
+  (substituindo os *weak* defaults), e o scheduler passa a funcionar.
+
+> Detalhe relacionado: o `configCPU_CLOCK_HZ` precisa bater com o clock real do
+> núcleo para o tick sair na frequência certa. Como o `main.c` não reconfigura o
+> RCC, o núcleo roda no HSI de reset; por isso cada perfil define `CPU_CLOCK_HZ`
+> com esse valor (8 MHz no F1, 16 MHz nos demais), repassado ao config via
+> `-DCONF_CPU_CLOCK_HZ` no `CMakeLists.txt`.
+
 ### Alternativa de debug — OpenOCD (para sondas clone)
 - **Contexto:** ST-LINK V2 **clones** (comuns em kits de Blue Pill) às vezes são
   recusados pelo atualizador oficial da ST. No caso deste guia a sonda era
@@ -700,17 +879,22 @@ cmake --build build --target flash
 | Trocar de placa | Mudar `-DBOARD=` no perfil CMake (ou trocar de perfil) |
 | Só gravar | Selecionar alvo `flash` + martelo (`Ctrl+F9`) |
 | Gravar e depurar | Config `Embedded GDB Server` + Debug (🐞) |
-| Piscar mais rápido/devagar | Ajustar `delay(...)` no `src/main.c` |
+| Piscar mais rápido/devagar | Ajustar `vTaskDelay(pdMS_TO_TICKS(...))` no `src/main.c` |
+| Adicionar outra tarefa | Novo `xTaskCreate(...)` antes de `vTaskStartScheduler()` |
 
 ### Adicionar uma placa nova
 
 1. Copie um arquivo de `boards/` e ajuste: `MCU_FAMILY`, `CPU_FLAGS`,
-   `LIBOPENCM3_TGT`, o LED (`LED_RCC/PORT/PIN`) e o mapa de memória
-   (`FLASH_*`, `RAM_*`).
+   `LIBOPENCM3_TGT`, o LED (`LED_RCC/PORT/PIN`), o mapa de memória
+   (`FLASH_*`, `RAM_*`), o `FREERTOS_PORT` (conforme o core) e o `CPU_CLOCK_HZ`
+   (clock real do núcleo).
 2. Compile a família correspondente: `make TARGETS=stm32/<familia>` na libopencm3.
 3. Se for uma família nova (ex.: F7), garanta que o `main.c` trata a API dela
    (F1 vs. demais).
 4. Use `-DBOARD=<NomeDoArquivo>`.
+
+> **Port do FreeRTOS por núcleo:** Cortex-M3 → `ARM_CM3`; Cortex-M4F → `ARM_CM4F`;
+> Cortex-M7 → `ARM_CM7/r0p1`; Cortex-M0/M0+ → `ARM_CM0`.
 
 ### Tabela de flags de CPU por núcleo
 
@@ -723,4 +907,6 @@ cmake --build build --target flash
 ---
 
 *Ambiente validado com STM32CubeCLT 1.21.0, CLion 2026.1.2, libopencm3 (clone
-atual) e Blue Pill STM32F103C8 + ST-LINK V2 (firmware V2J47S7).*
+atual), FreeRTOS-Kernel V11.1.0 e Blue Pill STM32F103C8 + ST-LINK V2 (firmware
+V2J47S7). Build do firmware com FreeRTOS confirmado para os três cores
+(Cortex-M3 / M4F / M7).*
