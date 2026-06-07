@@ -1,0 +1,19 @@
+# Perfil: NUCLEO-64 STM32F446RE
+# Cortex-M4 com FPU de precisao simples. LED de usuario LD2 em PA5.
+# (Mesma familia STM32F4 da Black Pill, mas o LED fica em PA5, nao PC13.)
+
+set(MCU_FAMILY      STM32F4)
+set(CPU_FLAGS       -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard)
+set(LIBOPENCM3_TGT  opencm3_stm32f4)           # make TARGETS=stm32/f4
+set(LIBOPENCM3_LD   cortex-m-generic.ld)
+
+# LED da placa.
+set(LED_RCC   RCC_GPIOA)
+set(LED_PORT  GPIOA)
+set(LED_PIN   GPIO5)
+
+# F446RE: 512K flash / 128K RAM.
+set(FLASH_SIZE  512K)
+set(RAM_SIZE    128K)
+set(FLASH_ORIGIN 0x08000000)
+set(RAM_ORIGIN   0x20000000)

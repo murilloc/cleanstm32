@@ -1,0 +1,23 @@
+# --- Build / saída de compilação ---
+build/
+cmake-build-*/
+*.elf
+*.hex
+*.bin
+*.map
+*.o
+*.d
+
+# --- IDE (CLion / JetBrains) ---
+.idea/
+*.iml
+
+# --- libopencm3: artefatos de build (mantemos as libs .a versionadas) ---
+libopencm3/lib/**/*.o
+libopencm3/lib/**/*.d
+libopencm3/**/generated.*.h
+
+# --- Sistema operacional ---
+Thumbs.db
+Desktop.ini
+.DS_Store
