@@ -12,6 +12,9 @@ cmake-build-*/
 .idea/
 *.iml
 
+# --- Claude Code (configuração local da máquina) ---
+.claude/settings.local.json
+
 # --- libopencm3: artefatos de build (mantemos as libs .a versionadas) ---
 libopencm3/lib/**/*.o
 libopencm3/lib/**/*.d
