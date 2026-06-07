@@ -60,10 +60,43 @@ add_link_options(
     -specs=nosys.specs
 )
 
-include_directories(${LIBOPENCM3_INC})
+# --- 4b. FreeRTOS ---------------------------------------------------------
+# Port escolhido pelo perfil da placa (FREERTOS_PORT), conforme o core:
+#   Cortex-M3 -> ARM_CM3 | Cortex-M4F -> ARM_CM4F | Cortex-M7 -> ARM_CM7/r0p1
+# CPU_CLOCK_HZ tambem vem do perfil (clock real do nucleo no HSI de reset).
+if(NOT DEFINED FREERTOS_PORT)
+    message(FATAL_ERROR "FREERTOS_PORT nao definido em boards/${BOARD}.cmake.")
+endif()
+if(NOT DEFINED CPU_CLOCK_HZ)
+    message(FATAL_ERROR "CPU_CLOCK_HZ nao definido em boards/${BOARD}.cmake.")
+endif()
+
+set(FREERTOS_DIR      ${CMAKE_SOURCE_DIR}/freertos)
+set(FREERTOS_PORT_DIR ${FREERTOS_DIR}/portable/GCC/${FREERTOS_PORT})
+
+set(FREERTOS_SRC
+    ${FREERTOS_DIR}/list.c
+    ${FREERTOS_DIR}/queue.c
+    ${FREERTOS_DIR}/tasks.c
+    ${FREERTOS_DIR}/timers.c
+    ${FREERTOS_DIR}/event_groups.c
+    ${FREERTOS_DIR}/stream_buffer.c
+    ${FREERTOS_PORT_DIR}/port.c
+    ${FREERTOS_DIR}/portable/MemMang/heap_4.c
+)
+
+# Clock real (HSI de reset) -> usado pelo FreeRTOSConfig.h (configCPU_CLOCK_HZ).
+add_compile_definitions(CONF_CPU_CLOCK_HZ=${CPU_CLOCK_HZ})
+
+include_directories(
+    ${LIBOPENCM3_INC}
+    ${FREERTOS_DIR}/include
+    ${FREERTOS_PORT_DIR}
+    ${CMAKE_SOURCE_DIR}/config        # onde mora o FreeRTOSConfig.h
+)
 
 # --- 5. Alvo --------------------------------------------------------------
-add_executable(${PROJECT_NAME}.elf src/main.c)
+add_executable(${PROJECT_NAME}.elf src/main.c ${FREERTOS_SRC})
 target_link_libraries(${PROJECT_NAME}.elf ${LIBOPENCM3_TGT})
 
 add_custom_command(TARGET ${PROJECT_NAME}.elf POST_BUILD

@@ -6,6 +6,11 @@ set(CPU_FLAGS       -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard)
 set(LIBOPENCM3_TGT  opencm3_stm32g4)           # make TARGETS=stm32/g4
 set(LIBOPENCM3_LD   cortex-m-generic.ld)
 
+# FreeRTOS: port do core (Cortex-M4F) e clock real do nucleo.
+# Sem rcc_clock_setup, o G474 roda no HSI de reset = 16 MHz.
+set(FREERTOS_PORT   ARM_CM4F)
+set(CPU_CLOCK_HZ    16000000)
+
 # LED da placa.
 set(LED_RCC   RCC_GPIOA)
 set(LED_PORT  GPIOA)
